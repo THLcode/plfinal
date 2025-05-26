@@ -345,7 +345,10 @@ const EmotionCodeGenerator = () => {
   const [transcript, setTranscript] = useState("");
   const [code, setCode] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
   const [isListening, setIsListening] = useState(false);
+  const [mediaStream, setMediaStream] = useState(null);
+  
   const [isGenerating, setIsGenerating] = useState(false);
 
   // Capture webcam image and detect emotion via Azure Face API
@@ -405,30 +408,43 @@ const EmotionCodeGenerator = () => {
   };
 
   const startListening = async () => {
-    setIsListening(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, {
-          type: "audio/webm",
-        });
-        const audioFile = new File([audioBlob], "recording.webm", {
-          type: "audio/webm",
-        });
-        const text = await transcribeAudio(audioFile);
-        setTranscript(text);
-        setIsListening(false);
-      };
-      recorder.start();
-    } catch (e) {
-      console.error("Recording failed", e);
+    if (isListening) {
+      // 녹음 중이면 중지
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
       setIsListening(false);
+    } else {
+      // 녹음 시작
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setMediaStream(stream);
+        const recorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = recorder;
+        audioChunksRef.current = [];
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunksRef.current.push(e.data);
+        };
+        recorder.onstop = async () => {
+          // 녹음 끝나면 stream 해제
+          stream.getTracks().forEach((track) => track.stop());
+          const audioBlob = new Blob(audioChunksRef.current, {
+            type: "audio/webm",
+          });
+          const audioFile = new File([audioBlob], "recording.webm", {
+            type: "audio/webm",
+          });
+          const text = await transcribeAudio(audioFile);
+          setTranscript(text);
+          setIsListening(false);
+          setMediaStream(null);
+        };
+        recorder.start();
+        setIsListening(true);
+      } catch (e) {
+        console.error("Recording failed", e);
+        setIsListening(false);
+      }
     }
   };
 
@@ -490,11 +506,12 @@ const EmotionCodeGenerator = () => {
           <Section flex={1}>
             <Button
               onClick={startListening}
-              disabled={isListening}
+              disabled={isGenerating}
               bg="#10b981"
               hover="#059669"
             >
-              {isListening ? <Spinner /> : "음성 요청"}
+              {isListening ? "녹음 중지" : "음성 요청"}
+              {isListening && <Spinner />}
             </Button>
             <Subtitle>
               요청 내용: <strong>{transcript || "없음"}</strong>
