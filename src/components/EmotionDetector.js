@@ -213,6 +213,7 @@
 import React, { useState, useRef } from "react";
 import Webcam from "react-webcam";
 import styled, { keyframes } from "styled-components";
+import AWS from "aws-sdk";
 
 // Keyframe for spinner animation
 const spin = keyframes`
@@ -351,6 +352,12 @@ const EmotionCodeGenerator = () => {
   
   const [isGenerating, setIsGenerating] = useState(false);
 
+  const rekognition = new AWS.Rekognition({
+    accessKeyId: process.env.REACT_APP_AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.REACT_APP_AWS_SECRET_ACCESS_KEY,
+    region: process.env.REACT_APP_AWS_REGION,
+  });
+
   // Capture webcam image and detect emotion via Azure Face API
   const detectEmotion = async () => {
     if (!webcamRef.current) return;
@@ -358,33 +365,42 @@ const EmotionCodeGenerator = () => {
     try {
       const screenshot = webcamRef.current.getScreenshot();
       const blob = await (await fetch(screenshot)).blob();
-      const url = `${process.env.REACT_APP_AZURE_FACE_API_ENDPOINT}/face/v1.0/detect?returnFaceAttributes=emotion`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "Ocp-Apim-Subscription-Key": process.env.REACT_APP_AZURE_FACE_API_KEY,
+      const buffer = await blob.arrayBuffer();
+
+      rekognition.detectFaces(
+        {
+          Image: { Bytes: new Uint8Array(buffer) },
+          Attributes: ["ALL"],
         },
-        body: blob,
-      });
-      const data = await res.json();
-      if (data && data[0]?.faceAttributes?.emotion) {
-        const emotions = data[0].faceAttributes.emotion;
-        const top = Object.entries(emotions).sort((a, b) => b[1] - a[1])[0][0];
-        const emojiMap = {
-          happy: "😄",
-          sad: "😢",
-          neutral: "😐",
-          anger: "😠",
-          fear: "😨",
-          contempt: "😒",
-          disgust: "🤢",
-          surprise: "😲",
-        };
-        setEmotion(`${emojiMap[top] || ""} ${top}`);
-      } else {
-        setEmotion("😐 neutral");
-      }
+        (err, data) => {
+          if (err) {
+            console.error("AWS Rekognition error:", err);
+            setEmotion("감정 인식 실패");
+          } else if (
+            data.FaceDetails &&
+            data.FaceDetails[0] &&
+            data.FaceDetails[0].Emotions
+          ) {
+            const emotions = data.FaceDetails[0].Emotions;
+            const top = emotions.reduce((a, b) =>
+              a.Confidence > b.Confidence ? a : b
+            );
+            const emojiMap = {
+              HAPPY: "😄",
+              SAD: "😢",
+              CALM: "😐",
+              ANGRY: "😠",
+              FEAR: "😨",
+              DISGUSTED: "🤢",
+              SURPRISED: "😲",
+              CONFUSED: "🤔",
+            };
+            setEmotion(`${emojiMap[top.Type] || ""} ${top.Type}`);
+          } else {
+            setEmotion("😐 neutral");
+          }
+        }
+      );
     } catch (e) {
       console.error("Emotion detection failed", e);
     }
