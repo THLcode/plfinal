@@ -1,6 +1,7 @@
 // import React, { useState, useRef } from "react";
 // import Webcam from "react-webcam";
 // import styled, { keyframes } from "styled-components";
+// import AWS from "aws-sdk";
 
 // // Keyframe for spinner animation
 // const spin = keyframes`
@@ -95,6 +96,7 @@
 
 // const CodeSection = styled.div`
 //   margin-top: 3rem;
+//   text-align: center;
 // `;
 
 // const CodeHeader = styled.h2`
@@ -125,37 +127,157 @@
 
 // const EmotionCodeGenerator = () => {
 //   const webcamRef = useRef(null);
+//   const mediaRecorderRef = useRef(null);
+//   const audioChunksRef = useRef([]);
+
 //   const [emotion, setEmotion] = useState("");
 //   const [transcript, setTranscript] = useState("");
 //   const [code, setCode] = useState("");
 //   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
 //   const [isListening, setIsListening] = useState(false);
+//   const [mediaStream, setMediaStream] = useState(null);
 
+//   const [isGenerating, setIsGenerating] = useState(false);
+
+//   const rekognition = new AWS.Rekognition({
+//     accessKeyId: process.env.REACT_APP_AWS_ACCESS_KEY_ID,
+//     secretAccessKey: process.env.REACT_APP_AWS_SECRET_ACCESS_KEY,
+//     region: process.env.REACT_APP_AWS_REGION,
+//   });
+
+//   // Capture webcam image and detect emotion via Azure Face API
 //   const detectEmotion = async () => {
+//     if (!webcamRef.current) return;
 //     setIsAnalyzing(true);
-//     setTimeout(() => {
-//       const emotions = ["😄 Happy", "😢 Sad", "😐 Neutral"];
-//       setEmotion(emotions[Math.floor(Math.random() * emotions.length)]);
-//       setIsAnalyzing(false);
-//     }, 2000);
+//     try {
+//       const screenshot = webcamRef.current.getScreenshot();
+//       const blob = await (await fetch(screenshot)).blob();
+//       const buffer = await blob.arrayBuffer();
+
+//       rekognition.detectFaces(
+//         {
+//           Image: { Bytes: new Uint8Array(buffer) },
+//           Attributes: ["ALL"],
+//         },
+//         (err, data) => {
+//           if (err) {
+//             console.error("AWS Rekognition error:", err);
+//             setEmotion("감정 인식 실패");
+//           } else if (
+//             data.FaceDetails &&
+//             data.FaceDetails[0] &&
+//             data.FaceDetails[0].Emotions
+//           ) {
+//             const emotions = data.FaceDetails[0].Emotions;
+//             const top = emotions.reduce((a, b) =>
+//               a.Confidence > b.Confidence ? a : b
+//             );
+//             const emojiMap = {
+//               HAPPY: "😄",
+//               SAD: "😢",
+//               CALM: "😐",
+//               ANGRY: "😠",
+//               FEAR: "😨",
+//               DISGUSTED: "🤢",
+//               SURPRISED: "😲",
+//               CONFUSED: "🤔",
+//             };
+//             setEmotion(`${emojiMap[top.Type] || ""} ${top.Type}`);
+//           } else {
+//             setEmotion("😐 neutral");
+//           }
+//         }
+//       );
+//     } catch (e) {
+//       console.error("Emotion detection failed", e);
+//     }
+//     setIsAnalyzing(false);
 //   };
 
-//   const startListening = () => {
-//     setIsListening(true);
-//     setTimeout(() => {
-//       setTranscript("리스트 정렬 코드");
+//   // Record audio and transcribe via OpenAI Whisper
+//   const transcribeAudio = async (file) => {
+//     const formData = new FormData();
+//     formData.append("file", file);
+//     formData.append("model", "whisper-1");
+//     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+//       method: "POST",
+//       headers: {
+//         Authorization: `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`,
+//       },
+//       body: formData,
+//     });
+//     const json = await res.json();
+//     return json.text;
+//   };
+
+//   const startListening = async () => {
+//     if (isListening) {
+//       // 녹음 중이면 중지
+//       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+//         mediaRecorderRef.current.stop();
+//       }
 //       setIsListening(false);
-//     }, 3000);
+//     } else {
+//       // 녹음 시작
+//       try {
+//         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+//         setMediaStream(stream);
+//         const recorder = new MediaRecorder(stream);
+//         mediaRecorderRef.current = recorder;
+//         audioChunksRef.current = [];
+//         recorder.ondataavailable = (e) => {
+//           if (e.data.size > 0) audioChunksRef.current.push(e.data);
+//         };
+//         recorder.onstop = async () => {
+//           // 녹음 끝나면 stream 해제
+//           stream.getTracks().forEach((track) => track.stop());
+//           const audioBlob = new Blob(audioChunksRef.current, {
+//             type: "audio/webm",
+//           });
+//           const audioFile = new File([audioBlob], "recording.webm", {
+//             type: "audio/webm",
+//           });
+//           const text = await transcribeAudio(audioFile);
+//           setTranscript(text);
+//           setIsListening(false);
+//           setMediaStream(null);
+//         };
+//         recorder.start();
+//         setIsListening(true);
+//       } catch (e) {
+//         console.error("Recording failed", e);
+//         setIsListening(false);
+//       }
+//     }
 //   };
 
-//   const generateCode = () => {
+//   // Generate code via OpenAI Chat
+//   const generateCode = async () => {
 //     if (!emotion || !transcript) return;
-//     setCode(
-//       `# Generated code based on emotion: ${emotion}\n# Request: ${transcript}\n\n` +
-//         `def sort_list():\n` +
-//         `    my_list = [3, 1, 4, 1, 5]\n` +
-//         `    return sorted(my_list)`
-//     );
+//     setIsGenerating(true);
+//     try {
+//       const messages = [
+//         { role: "system", content: "You are a helpful code generator." },
+//         {
+//           role: "user",
+//           content: `Emotion: ${emotion}\nRequest: ${transcript}\nGenerate Python code:`,
+//         },
+//       ];
+//       const res = await fetch("https://api.openai.com/v1/chat/completions", {
+//         method: "POST",
+//         headers: {
+//           "Content-Type": "application/json",
+//           Authorization: `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`,
+//         },
+//         body: JSON.stringify({ model: "gpt-4", messages, max_tokens: 500 }),
+//       });
+//       const json = await res.json();
+//       setCode(json.choices[0].message.content);
+//     } catch (e) {
+//       console.error("Code generation failed", e);
+//     }
+//     setIsGenerating(false);
 //   };
 
 //   return (
@@ -188,15 +310,25 @@
 //           <Section flex={1}>
 //             <Button
 //               onClick={startListening}
-//               disabled={isListening}
+//               disabled={isGenerating}
 //               bg="#10b981"
 //               hover="#059669"
 //             >
-//               {isListening ? <Spinner /> : "음성으로 요청하기"}
+//               {isListening ? "녹음 중지" : "음성 요청"}
+//               {isListening && <Spinner />}
 //             </Button>
 //             <Subtitle>
 //               요청 내용: <strong>{transcript || "없음"}</strong>
 //             </Subtitle>
+//             <Button
+//               onClick={generateCode}
+//               disabled={!emotion || !transcript || isGenerating}
+//               bg="#f59e0b"
+//               hover="#d97706"
+//               style={{ marginTop: "1.5rem" }}
+//             >
+//               {isGenerating ? <Spinner /> : "코드 생성"}
+//             </Button>
 //           </Section>
 //         </FlexGrid>
 //         <CodeSection>
@@ -209,11 +341,13 @@
 // };
 
 // export default EmotionCodeGenerator;
-
 import React, { useState, useRef } from "react";
 import Webcam from "react-webcam";
 import styled, { keyframes } from "styled-components";
 import AWS from "aws-sdk";
+import AceEditor from "react-ace";
+import "ace-builds/src-noconflict/mode-python";
+import "ace-builds/src-noconflict/theme-monokai";
 
 // Keyframe for spinner animation
 const spin = keyframes`
@@ -317,17 +451,6 @@ const CodeHeader = styled.h2`
   margin-bottom: 1rem;
 `;
 
-const CodeBlock = styled.pre`
-  background: #111827;
-  color: #d1d5db;
-  padding: 1.75rem;
-  border-radius: 0.75rem;
-  font-family: "Source Code Pro", monospace;
-  font-size: 0.875rem;
-  max-height: 350px;
-  overflow: auto;
-`;
-
 const Spinner = styled.div`
   width: 1.25rem;
   height: 1.25rem;
@@ -346,10 +469,8 @@ const EmotionCodeGenerator = () => {
   const [transcript, setTranscript] = useState("");
   const [code, setCode] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-
   const [isListening, setIsListening] = useState(false);
   const [mediaStream, setMediaStream] = useState(null);
-  
   const [isGenerating, setIsGenerating] = useState(false);
 
   const rekognition = new AWS.Rekognition({
@@ -358,7 +479,7 @@ const EmotionCodeGenerator = () => {
     region: process.env.REACT_APP_AWS_REGION,
   });
 
-  // Capture webcam image and detect emotion via Azure Face API
+  // Capture webcam image and detect emotion via AWS Rekognition
   const detectEmotion = async () => {
     if (!webcamRef.current) return;
     setIsAnalyzing(true);
@@ -425,15 +546,18 @@ const EmotionCodeGenerator = () => {
 
   const startListening = async () => {
     if (isListening) {
-      // 녹음 중이면 중지
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== "inactive"
+      ) {
         mediaRecorderRef.current.stop();
       }
       setIsListening(false);
     } else {
-      // 녹음 시작
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
         setMediaStream(stream);
         const recorder = new MediaRecorder(stream);
         mediaRecorderRef.current = recorder;
@@ -442,7 +566,6 @@ const EmotionCodeGenerator = () => {
           if (e.data.size > 0) audioChunksRef.current.push(e.data);
         };
         recorder.onstop = async () => {
-          // 녹음 끝나면 stream 해제
           stream.getTracks().forEach((track) => track.stop());
           const audioBlob = new Blob(audioChunksRef.current, {
             type: "audio/webm",
@@ -464,16 +587,49 @@ const EmotionCodeGenerator = () => {
     }
   };
 
-  // Generate code via OpenAI Chat
+  // Generate code via OpenAI Chat with emotion-based prompt
   const generateCode = async () => {
     if (!emotion || !transcript) return;
     setIsGenerating(true);
+
+    // 감정에 따른 프롬프트 조정
+    let promptTemplate = "";
+    switch (true) {
+      case emotion.includes("HAPPY"):
+        promptTemplate = `You are a cheerful code generator. Add happy emojis to comments and keep the code simple and fun. Here's the request: "${transcript}"`;
+        break;
+      case emotion.includes("SAD"):
+        promptTemplate = `You are a supportive code generator. Add comforting comments and provide detailed explanations in the code. Here's the request: "${transcript}"`;
+        break;
+      case emotion.includes("ANGRY"):
+        promptTemplate = `You are a calm code generator. Add soothing comments to help the user relax and provide concise code. Here's the request: "${transcript}"`;
+        break;
+      case emotion.includes("CONFUSED"):
+        promptTemplate = `You are a patient code generator. Add step-by-step explanations in the comments and break down the code into smaller parts. Here's the request: "${transcript}"`;
+        break;
+      case emotion.includes("DISGUSTED"):
+        promptTemplate = `You are a humorous code generator. Add funny comments to lighten the mood and keep the code simple. Here's the request: "${transcript}"`;
+        break;
+      case emotion.includes("SURPRISED"):
+        promptTemplate = `You are an enthusiastic code generator. Add exciting comments and provide concise code. Here's the request: "${transcript}"`;
+        break;
+      case emotion.includes("CALM"):
+        promptTemplate = `You are a serene code generator. Add peaceful comments and provide clear, well-structured code. Here's the request: "${transcript}"`;
+        break;
+      case emotion.includes("FEAR"):
+        promptTemplate = `You are a reassuring code generator. Add encouraging comments and provide detailed, easy-to-understand code. Here's the request: "${transcript}"`;
+        break;
+      default:
+        promptTemplate = `You are a helpful code generator. Provide clear and concise code with appropriate comments. Here's the request: "${transcript}"`;
+        break;
+    }
+
     try {
       const messages = [
-        { role: "system", content: "You are a helpful code generator." },
+        { role: "system", content: promptTemplate },
         {
           role: "user",
-          content: `Emotion: ${emotion}\nRequest: ${transcript}\nGenerate Python code:`,
+          content: `Generate Python code for the following request: ${transcript}`,
         },
       ];
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -545,7 +701,18 @@ const EmotionCodeGenerator = () => {
         </FlexGrid>
         <CodeSection>
           <CodeHeader>생성된 코드:</CodeHeader>
-          <CodeBlock>{code || "현재 생성된 코드가 없습니다."}</CodeBlock>
+          <AceEditor
+            mode="python"
+            theme="monokai"
+            value={code || "현재 생성된 코드가 없습니다."}
+            width="100%"
+            height="350px"
+            readOnly
+            setOptions={{
+              showLineNumbers: true,
+              tabSize: 4,
+            }}
+          />
         </CodeSection>
       </Card>
     </PageWrapper>
