@@ -504,7 +504,7 @@ const EmotionCodeGenerator = () => {
               <Webcam
                 ref={webcamRef}
                 screenshotFormat="image/jpeg"
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1" }}
               />
             </WebcamContainer>
             <Button
